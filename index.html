@@ -1,0 +1,80 @@
+<!doctype html>
+<html><head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Mera AI</title>
+<style>
+body{font-family:sans-serif;margin:0;padding:12px;background:#111;color:#eee}
+input,textarea,button{width:100%;box-sizing:border-box;margin:4px 0;padding:10px;border-radius:8px;border:1px solid #444;background:#222;color:#eee;font-size:16px}
+button{background:#4a7cff;border:0}
+button:disabled{opacity:.5}
+#log{white-space:pre-wrap;background:#1a1a1a;padding:10px;border-radius:8px;min-height:120px;margin-bottom:8px}
+#st{color:#ffb74d;min-height:20px}
+</style></head><body>
+<input id="tok" type="password" placeholder="APP_TOKEN">
+<div id="log"></div>
+<div id="st"></div>
+<textarea id="msg" rows="4" placeholder="Hukam likho..."></textarea>
+<button onclick="run(chat)">Bhejo (chat)</button>
+<button onclick="run(build)">Naya project ZIP banao</button>
+<input id="zip" type="file" accept=".zip">
+<button onclick="run(edit)">ZIP mein sirf yeh badlo (edit)</button>
+<button onclick="run(analyze)">ZIP parho aur jawab do</button>
+<script>
+let history = [];
+const $ = id => document.getElementById(id);
+const H = () => ({ "x-app-token": $("tok").value });
+const show = t => { $("log").textContent += t + "\n\n"; };
+
+async function call(url, opts) {
+  const r = await fetch(url, opts);
+  const t = await r.text();
+  let d; try { d = JSON.parse(t); } catch { d = { error: t.slice(0, 300) }; }
+  if (!r.ok) throw new Error(d.error || "HTTP " + r.status);
+  return d;
+}
+async function run(fn) {
+  const bs = document.querySelectorAll("button");
+  bs.forEach(b => b.disabled = true);
+  $("st").textContent = "⏳ Kaam chal raha hai, 1-2 minute lag sakte hain...";
+  try { await fn(); } catch (e) { show("❌ Error: " + e.message); }
+  $("st").textContent = ""; bs.forEach(b => b.disabled = false);
+}
+function save(b64, name) {
+  const bin = atob(b64), u = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) u[i] = bin.charCodeAt(i);
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(new Blob([u], { type: "application/zip" }));
+  a.download = name; a.click();
+}
+const J = body => ({ method: "POST", headers: { ...H(), "Content-Type": "application/json" }, body: JSON.stringify(body) });
+function fileForm() {
+  const f = $("zip").files[0]; if (!f) throw new Error("Pehle ZIP chuno");
+  const fd = new FormData(); fd.append("file", f); fd.append("message", $("msg").value); return fd;
+}
+
+async function chat() {
+  const message = $("msg").value; if (!message) return;
+  show("Aap: " + message); $("msg").value = "";
+  const d = await call("/chat", J({ history, message }));
+  history.push({ role: "user", text: message }, { role: "model", text: d.reply });
+  show("AI: " + d.reply);
+}
+async function build() {
+  const prompt = $("msg").value; if (!prompt) return;
+  show("Build: " + prompt);
+  const d = await call("/build", J({ prompt }));
+  show(d.report); save(d.zip_base64, "project.zip");
+}
+async function edit() {
+  if (!$("msg").value) throw new Error("Hukam likho (kya badalna hai)");
+  const fd = fileForm(); show("Edit: " + $("msg").value);
+  const d = await call("/edit", { method: "POST", headers: H(), body: fd });
+  show(d.report); save(d.zip_base64, "updated.zip");
+}
+async function analyze() {
+  const fd = fileForm();
+  const d = await call("/analyze", { method: "POST", headers: H(), body: fd });
+  show("AI: " + d.reply);
+}
+</script></body></html>

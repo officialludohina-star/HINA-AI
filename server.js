@@ -175,7 +175,7 @@ app.post("/chat", async (req, res) => {
   try {
     const { history = [], message = "" } = req.body;
     const contents = [...history, { role: "user", text: message }].map(m => ({ role: m.role, parts: [{ text: m.text }] }));
-    res.json({ reply: await gemini(contents, { search: true, system: SYSTEM + CHAT_REPORT_RULE }) });
+    res.json({ reply: await gemini(contents, { search: process.env.USE_SEARCH === "1", system: SYSTEM + CHAT_REPORT_RULE }) });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 

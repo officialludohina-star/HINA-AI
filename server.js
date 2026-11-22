@@ -13,8 +13,8 @@ app.use(cors());
 app.use(express.json({ limit: "10mb" }));
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 25 * 1024 * 1024 } });
 
-const KEY = process.env.GEMINI_API_KEY;
-const MODEL = process.env.GEMINI_MODEL || "gemini-2.5-flash";
+const KEY = process.env.ANTHROPIC_API_KEY;
+const MODEL = process.env.ANTHROPIC_MODEL || "claude-sonnet-5-5";
 const TOKEN = process.env.APP_TOKEN;
 
 const SYSTEM = `You are an elite senior software engineer with expert knowledge of every programming
@@ -49,7 +49,9 @@ function safePath(p) {
 }
 
 function parseJSON(text) {
-  const clean = text.replace(/^\s*```(?:json)?/i, "").replace(/```\s*$/, "").trim();
+  let clean = text.replace(/^\s*```(?:json)?/i, "").replace(/```\s*$/, "").trim();
+  const a = clean.indexOf("{"), b = clean.lastIndexOf("}");
+  if (a > 0 && b > a) clean = clean.slice(a, b + 1);
   try { return JSON.parse(clean); }
   catch { throw new Error("AI ka jawab beech mein kat gaya ya JSON galat tha. Chhota kaam maango ya dobara try karo."); }
 }
@@ -105,23 +107,31 @@ function buildReport({ title, ai = {}, check, rounds, extra = [] }) {
   ].join("\n");
 }
 
-async function gemini(contents, { json = false, search = false, system = SYSTEM, temperature = 0.2 } = {}) {
+// Naam purana hai (gemini) taake baqi code na badle, lekin ab andar Anthropic (Claude) API chalti hai.
+// "contents" Gemini-style hai: [{role:"user"|"model", parts:[{text}]}] -> Claude format mein badal diya jata hai.
+async function gemini(contents, { json = false, system = SYSTEM, temperature = 0.2 } = {}) {
+  const messages = contents.map(m => ({
+    role: m.role === "model" ? "assistant" : "user",
+    content: (m.parts || []).map(p => p.text || "").join(""),
+  }));
   const body = {
-    systemInstruction: { parts: [{ text: system }] },
-    contents,
-    generationConfig: { maxOutputTokens: 60000, temperature },
+    model: MODEL,
+    max_tokens: 16000,
+    temperature,
+    system: json ? system + "\n\nReply with ONLY valid JSON, no text before or after, no code fences." : system,
+    messages,
   };
-  if (json) body.generationConfig.responseMimeType = "application/json";
-  if (search) body.tools = [{ google_search: {} }];
   for (let i = 0; i < 3; i++) {
-    const r = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/${MODEL}:generateContent`,
-      { method: "POST", headers: { "Content-Type": "application/json", "x-goog-api-key": KEY }, body: JSON.stringify(body) }
-    );
+    const r = await fetch("https://api.anthropic.com/v1/messages", {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-api-key": KEY, "anthropic-version": "2023-06-01" },
+      body: JSON.stringify(body),
+    });
     const d = await r.json();
     if ((r.status === 429 || r.status >= 500) && i < 2) { await new Promise(s => setTimeout(s, 2500 * (i + 1))); continue; }
-    const text = (d?.candidates?.[0]?.content?.parts || []).map(p => p.text || "").join("");
+    const text = (d?.content || []).map(p => p.text || "").join("");
     if (!text) throw new Error(d?.error?.message || JSON.stringify(d).slice(0, 500));
+    if (d.stop_reason === "max_tokens" && json) throw new Error("AI ka jawab beech mein kat gaya (bohot lamba tha). Chhota kaam maango ya hisson mein banwao.");
     return text;
   }
 }
@@ -170,12 +180,12 @@ app.use((req, res, next) => {
   next();
 });
 
-// 1) Chat (internet search + har jawab ke end mein report)
+// 1) Chat (har jawab ke end mein report)
 app.post("/chat", async (req, res) => {
   try {
     const { history = [], message = "" } = req.body;
     const contents = [...history, { role: "user", text: message }].map(m => ({ role: m.role, parts: [{ text: m.text }] }));
-    res.json({ reply: await gemini(contents, { search: process.env.USE_SEARCH === "1", system: SYSTEM + CHAT_REPORT_RULE }) });
+    res.json({ reply: await gemini(contents, { system: SYSTEM + CHAT_REPORT_RULE }) });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
@@ -251,4 +261,4 @@ app.post("/analyze", upload.single("file"), async (req, res) => {
 });
 
 if (require.main === module) app.listen(process.env.PORT || 3000);
-module.exports = { checkFiles, safePath, buildReport, parseJSON };
+module.exports = { checkFiles, safePath, buildReport, parseJSON, gemini };
